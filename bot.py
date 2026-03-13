@@ -15,7 +15,8 @@ from telegram.ext import (
 
 import os
 TOKEN = os.getenv("BOT_TOKEN")
-
+print("TOKEN EXISTS:", bool(TOKEN))
+print("TOKEN PREFIX:", TOKEN[:10] if TOKEN else "NONE")
 PHOTO_DIR = Path("photos")
 
 
