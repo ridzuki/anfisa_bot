@@ -16,8 +16,25 @@ from telegram.ext import (
 import os
 
 TOKEN = os.getenv("BOT_TOKEN")
+OWNER_CHAT_ID = os.getenv("OWNER_CHAT_ID")
+
+if not TOKEN:
+    raise ValueError("BOT_TOKEN не найден в переменных окружения")
+
+if not OWNER_CHAT_ID:
+    raise ValueError("OWNER_CHAT_ID не найден в переменных окружения")
+
+
+OWNER_CHAT_ID = int(OWNER_CHAT_ID)
 
 PHOTO_DIR = Path("photos")
+
+
+logging.basicConfig(
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
 
 TEXTS = {
@@ -81,6 +98,15 @@ TEXTS = {
         "⚠️ Самое важное лекарство — <b>габапентин</b>, "
         "если начнётся цистит."
     ),
+    "visit_prompt": (
+        "📸 <b>Фото визита</b>\n\n"
+        "Пожалуйста, отправьте фото котёнка.\n"
+        "Я перешлю его хозяйке в личку."
+    ),
+    "visit_success": (
+        "✅ Фото отправлено хозяйке.\n"
+        "Спасибо большое!"
+    ),
 }
 
 
@@ -126,7 +152,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [
         ["🚪 Как войти", "🍽 Еда и кормушка"],
         ["💧 Вода и поилки", "🧻 Лотки и наполнитель"],
-        ["💊 Аптечка и остальное"],
+        ["💊 Аптечка и остальное", "📸 Ходил(а) к котёнку"],
     ]
 
     return ReplyKeyboardMarkup(
@@ -136,8 +162,41 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-async def send_single_photo(chat_id: int, context: ContextTypes.DEFAULT_TYPE, key: str):
+def user_title(update: Update) -> str:
+    user = update.effective_user
+    if not user:
+        return "Неизвестный пользователь"
+    full_name = " ".join(part for part in [user.first_name, user.last_name] if part).strip()
+    username = f"@{user.username}" if user.username else "без username"
+    return f"{full_name or 'Без имени'} ({username}, id={user.id})"
 
+
+async def notify_owner(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+    try:
+        await context.bot.send_message(
+            chat_id=OWNER_CHAT_ID,
+            text=text,
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.exception("Не удалось отправить лог владельцу: %s", e)
+        
+
+async def log_action(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str) -> None:
+    chat = update.effective_chat
+    chat_id = chat.id if chat else "unknown"
+    safe_action = html.escape(action)
+    safe_user = html.escape(user_title(update))
+    text = (
+        f"📋 <b>Действие в боте</b>\n\n"
+        f"<b>Пользователь:</b> {safe_user}\n"
+        f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
+        f"<b>Действие:</b> {safe_action}"
+    )
+    await notify_owner(context, text)
+
+
+async def send_single_photo(chat_id: int, context: ContextTypes.DEFAULT_TYPE, key: str):
     text = TEXTS[key]
     photo_path = PHOTOS[key][0]
 
@@ -152,7 +211,6 @@ async def send_single_photo(chat_id: int, context: ContextTypes.DEFAULT_TYPE, ke
 
 
 async def send_album(chat_id: int, context: ContextTypes.DEFAULT_TYPE, key: str):
-
     text = TEXTS[key]
     photo_paths = PHOTOS[key]
 
@@ -192,14 +250,14 @@ async def send_album(chat_id: int, context: ContextTypes.DEFAULT_TYPE, key: str)
             f.close()
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
+    context.user_data["awaiting_visit_photo"] = False
     await send_single_photo(chat_id, context, "welcome")
+    await log_action(update, context, "/start")
 
 
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     if not update.message or not update.message.text:
         return
 
@@ -220,26 +278,94 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif text == "💊 Аптечка и остальное":
         await send_album(chat_id, context, "med")
+    elif text == "📸 Ходил(а) к котёнку":
+        context.user_data["awaiting_visit_photo"] = True
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=TEXTS["visit_prompt"],
+            parse_mode="HTML",
+            reply_markup=main_menu_keyboard(),
+        )
+        await log_action(update, context, "Нажата кнопка: Ходил(а) к котёнку")
 
     else:
+        context.user_data["awaiting_visit_photo"] = False
         await send_single_photo(chat_id, context, "welcome")
+        await log_action(update, context, f"Отправлен произвольный текст: {text}")
 
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not update.message.photo:
+        return
 
-    print(f"Ошибка: {context.error}")
+    chat_id = update.effective_chat.id
+    waiting = context.user_data.get("awaiting_visit_photo", False)
+
+    if not waiting:
+        await log_action(update, context, "Пользователь отправил фото вне режима отправки визита")
+        return
+
+    largest_photo = update.message.photo[-1]
+    caption = update.message.caption or ""
+
+    safe_user = html.escape(user_title(update))
+    safe_caption = html.escape(caption)
 
 
-def main():
+ await context.bot.send_photo(
+        chat_id=OWNER_CHAT_ID,
+        photo=largest_photo.file_id,
+        caption=(
+            f"📸 <b>Фото от посетителя</b>\n\n"
+            f"<b>Пользователь:</b> {safe_user}\n"
+            f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
+            f"<b>Подпись:</b> {safe_caption if safe_caption else '—'}"
+        ),
+        parse_mode="HTML",
+    )
 
+    await notify_owner(
+        context,
+        (
+            f"✅ <b>Фото визита получено</b>\n\n"
+            f"<b>От:</b> {safe_user}\n"
+            f"<b>Chat ID:</b> <code>{chat_id}</code>"
+        ),
+    )
+
+    context.user_data["awaiting_visit_photo"] = False
+
+
+await context.bot.send_message(
+        chat_id=chat_id,
+        text=TEXTS["visit_success"],
+        parse_mode="HTML",
+        reply_markup=main_menu_keyboard(),
+    )
+
+    await log_action(update, context, "Пользователь отправил фото визита")
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.exception("Ошибка: %s", context.error)
+    try:
+        await notify_owner(
+            context,
+            f"❌ <b>Ошибка в боте</b>\n\n<code>{html.escape(str(context.error))}</code>",
+        )
+    except Exception:
+        pass
+
+
+def main() -> None:
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_handler))
     app.add_error_handler(error_handler)
 
-    print("Бот запущен")
-
+    logger.info("Бот запущен")
     app.run_polling()
 
 
