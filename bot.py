@@ -255,6 +255,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data["awaiting_visit_photo"] = False
     await send_single_photo(chat_id, context, "welcome")
     await log_action(update, context, "/start")
+    print("MY CHAT ID:", update.effective_chat.id)
 
 
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
