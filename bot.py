@@ -1,4 +1,7 @@
 from pathlib import Path
+import os
+import html
+import logging
 
 from telegram import (
     Update,
@@ -13,29 +16,21 @@ from telegram.ext import (
     filters,
 )
 
-import os
-
 TOKEN = os.getenv("BOT_TOKEN")
 OWNER_CHAT_ID = os.getenv("OWNER_CHAT_ID")
 
 if not TOKEN:
     raise ValueError("BOT_TOKEN не найден в переменных окружения")
 
-if not OWNER_CHAT_ID:
-    raise ValueError("OWNER_CHAT_ID не найден в переменных окружения")
-
-
-OWNER_CHAT_ID = int(OWNER_CHAT_ID)
+OWNER_CHAT_ID = int(OWNER_CHAT_ID) if OWNER_CHAT_ID else None
 
 PHOTO_DIR = Path("photos")
-
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
-
 
 TEXTS = {
     "welcome": (
@@ -46,14 +41,12 @@ TEXTS = {
         "🧼 Лоточки желательно убирать примерно <b>раз в 2 дня</b>.\n\n"
         "👇 Нажимайте кнопки ниже, чтобы открыть нужный раздел."
     ),
-
     "entry": (
         "🚪 <b>Как войти</b>\n\n"
         "🔔 Домофон иногда <b>не открывает дверь</b>. "
         "Если не сработает — используйте <b>запасной ключ</b>.\n\n"
         "🎀 Вход в квартиру — <b>в холле, дверь с бантом</b>."
     ),
-
     "food": (
         "🍽️ <b>Еда и кормушка</b>\n\n"
         "⚠️ У Анфисы <b>хронический цистит</b>, поэтому ей можно только "
@@ -65,10 +58,9 @@ TEXTS = {
         "🗄️ В спальне есть <b>шкаф с запасным кормом</b>.\n"
         "🥣 Там же есть <b>1 пауч жидкого корма</b>.\n\n"
         "🥒 Анфиса очень любит <b>огурцы и сладкие перцы</b>.\n"
-        "Если будет возможность — дайте ей <b>огурчик\перчик</b>, "
-        "она этому очень радуется. Но <b>не больше 1 огурца\половины болгарского перца</b> в сутки"
+        "Если будет возможность — дайте ей <b>огурчик\\перчик</b>, "
+        "она этому очень радуется. Но <b>не больше 1 огурца\\половины болгарского перца</b> в сутки"
     ),
-
     "water": (
         "💧 <b>Вода и поилки</b>\n\n"
         "🚰 Автопоилка находится <b>на кухне</b>.\n"
@@ -79,7 +71,6 @@ TEXTS = {
         "🧽 Автопоилку очень прошу <b>помыть 25–26 числа</b> "
         "и налить <b>новой воды</b>."
     ),
-
     "trays": (
         "🧻 <b>Лотки и наполнитель</b>\n\n"
         "🛁 Лотки находятся <b>в ванной</b>.\n\n"
@@ -90,7 +81,6 @@ TEXTS = {
         "😷 Если появится запах — рядом есть "
         "<b>запасной наполнитель и большие пакеты для мусора</b>."
     ),
-
     "med": (
         "💊 <b>Аптечка</b>\n\n"
         "🗄️ В <b>комнате</b> есть <b>шкаф</b>.\n"
@@ -109,37 +99,31 @@ TEXTS = {
     ),
 }
 
-
 PHOTOS = {
     "welcome": [
         PHOTO_DIR / "anfi.jpg",
     ],
-
     "entry": [
         PHOTO_DIR / "domofon.jpg",
         PHOTO_DIR / "door1.jpg",
         PHOTO_DIR / "hall.jpg",
         PHOTO_DIR / "door2.jpg",
     ],
-
     "food": [
         PHOTO_DIR / "feeder.jpg",
         PHOTO_DIR / "shkaf.jpg",
         PHOTO_DIR / "shkaf_food.jpg",
         PHOTO_DIR / "shkaf_food_2.jpg",
     ],
-
     "water": [
         PHOTO_DIR / "water1.jpg",
         PHOTO_DIR / "water1_zoom.jpg",
         PHOTO_DIR / "water2.jpg",
     ],
-
     "trays": [
         PHOTO_DIR / "lotki.jpg",
         PHOTO_DIR / "lotki_zoom.jpg",
     ],
-
     "med": [
         PHOTO_DIR / "shkaf.jpg",
         PHOTO_DIR / "shkaf_farm.jpg",
@@ -148,7 +132,6 @@ PHOTOS = {
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
-
     keyboard = [
         ["🚪 Как войти", "🍽 Еда и кормушка"],
         ["💧 Вода и поилки", "🧻 Лотки и наполнитель"],
@@ -172,6 +155,10 @@ def user_title(update: Update) -> str:
 
 
 async def notify_owner(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+    if not OWNER_CHAT_ID:
+        logger.info("OWNER_CHAT_ID не задан, пропускаю отправку владельцу")
+        return
+
     try:
         await context.bot.send_message(
             chat_id=OWNER_CHAT_ID,
@@ -180,7 +167,7 @@ async def notify_owner(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
         )
     except Exception as e:
         logger.exception("Не удалось отправить лог владельцу: %s", e)
-        
+
 
 async def log_action(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str) -> None:
     chat = update.effective_chat
@@ -219,7 +206,6 @@ async def send_album(chat_id: int, context: ContextTypes.DEFAULT_TYPE, key: str)
 
     try:
         for i, path in enumerate(photo_paths):
-
             f = open(path, "rb")
             files.append(f)
 
@@ -229,7 +215,6 @@ async def send_album(chat_id: int, context: ContextTypes.DEFAULT_TYPE, key: str)
                 media.append(InputMediaPhoto(media=f))
 
         if len(media) == 1:
-
             await context.bot.send_photo(
                 chat_id=chat_id,
                 photo=files[0],
@@ -237,9 +222,7 @@ async def send_album(chat_id: int, context: ContextTypes.DEFAULT_TYPE, key: str)
                 parse_mode="HTML",
                 reply_markup=main_menu_keyboard(),
             )
-
         else:
-
             await context.bot.send_media_group(
                 chat_id=chat_id,
                 media=media,
@@ -255,7 +238,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data["awaiting_visit_photo"] = False
     await send_single_photo(chat_id, context, "welcome")
     await log_action(update, context, "/start")
-    print("MY CHAT ID:", update.effective_chat.id)
+    logger.info("MY CHAT ID: %s", update.effective_chat.id)
+
+
+async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    await update.message.reply_text(f"Твой chat_id: {chat_id}")
+    logger.info("MY CHAT ID via /myid: %s", chat_id)
 
 
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -279,6 +268,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif text == "💊 Аптечка и остальное":
         await send_album(chat_id, context, "med")
+
     elif text == "📸 Ходил(а) к котёнку":
         context.user_data["awaiting_visit_photo"] = True
         await context.bot.send_message(
@@ -312,32 +302,31 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     safe_user = html.escape(user_title(update))
     safe_caption = html.escape(caption)
 
+    if OWNER_CHAT_ID:
+        await context.bot.send_photo(
+            chat_id=OWNER_CHAT_ID,
+            photo=largest_photo.file_id,
+            caption=(
+                f"📸 <b>Фото от посетителя</b>\n\n"
+                f"<b>Пользователь:</b> {safe_user}\n"
+                f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
+                f"<b>Подпись:</b> {safe_caption if safe_caption else '—'}"
+            ),
+            parse_mode="HTML",
+        )
 
- await context.bot.send_photo(
-        chat_id=OWNER_CHAT_ID,
-        photo=largest_photo.file_id,
-        caption=(
-            f"📸 <b>Фото от посетителя</b>\n\n"
-            f"<b>Пользователь:</b> {safe_user}\n"
-            f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
-            f"<b>Подпись:</b> {safe_caption if safe_caption else '—'}"
-        ),
-        parse_mode="HTML",
-    )
-
-    await notify_owner(
-        context,
-        (
-            f"✅ <b>Фото визита получено</b>\n\n"
-            f"<b>От:</b> {safe_user}\n"
-            f"<b>Chat ID:</b> <code>{chat_id}</code>"
-        ),
-    )
+        await notify_owner(
+            context,
+            (
+                f"✅ <b>Фото визита получено</b>\n\n"
+                f"<b>От:</b> {safe_user}\n"
+                f"<b>Chat ID:</b> <code>{chat_id}</code>"
+            ),
+        )
 
     context.user_data["awaiting_visit_photo"] = False
 
-
-await context.bot.send_message(
+    await context.bot.send_message(
         chat_id=chat_id,
         text=TEXTS["visit_success"],
         parse_mode="HTML",
@@ -362,6 +351,7 @@ def main() -> None:
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("myid", myid))
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_handler))
     app.add_error_handler(error_handler)
