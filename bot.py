@@ -22,7 +22,10 @@ OWNER_CHAT_ID = os.getenv("OWNER_CHAT_ID")
 if not TOKEN:
     raise ValueError("BOT_TOKEN не найден в переменных окружения")
 
-OWNER_CHAT_ID = int(OWNER_CHAT_ID) if OWNER_CHAT_ID else None
+if not OWNER_CHAT_ID:
+    raise ValueError("OWNER_CHAT_ID не найден в переменных окружения")
+
+OWNER_CHAT_ID = int(OWNER_CHAT_ID)
 
 PHOTO_DIR = Path("photos")
 
@@ -41,12 +44,14 @@ TEXTS = {
         "🧼 Лоточки желательно убирать примерно <b>раз в 2 дня</b>.\n\n"
         "👇 Нажимайте кнопки ниже, чтобы открыть нужный раздел."
     ),
+
     "entry": (
         "🚪 <b>Как войти</b>\n\n"
         "🔔 Домофон иногда <b>не открывает дверь</b>. "
         "Если не сработает — используйте <b>запасной ключ</b>.\n\n"
         "🎀 Вход в квартиру — <b>в холле, дверь с бантом</b>."
     ),
+
     "food": (
         "🍽️ <b>Еда и кормушка</b>\n\n"
         "⚠️ У Анфисы <b>хронический цистит</b>, поэтому ей можно только "
@@ -61,6 +66,7 @@ TEXTS = {
         "Если будет возможность — дайте ей <b>огурчик\\перчик</b>, "
         "она этому очень радуется. Но <b>не больше 1 огурца\\половины болгарского перца</b> в сутки"
     ),
+
     "water": (
         "💧 <b>Вода и поилки</b>\n\n"
         "🚰 Автопоилка находится <b>на кухне</b>.\n"
@@ -71,6 +77,7 @@ TEXTS = {
         "🧽 Автопоилку очень прошу <b>помыть 25–26 числа</b> "
         "и налить <b>новой воды</b>."
     ),
+
     "trays": (
         "🧻 <b>Лотки и наполнитель</b>\n\n"
         "🛁 Лотки находятся <b>в ванной</b>.\n\n"
@@ -81,6 +88,7 @@ TEXTS = {
         "😷 Если появится запах — рядом есть "
         "<b>запасной наполнитель и большие пакеты для мусора</b>."
     ),
+
     "med": (
         "💊 <b>Аптечка</b>\n\n"
         "🗄️ В <b>комнате</b> есть <b>шкаф</b>.\n"
@@ -103,27 +111,32 @@ PHOTOS = {
     "welcome": [
         PHOTO_DIR / "anfi.jpg",
     ],
+
     "entry": [
         PHOTO_DIR / "domofon.jpg",
         PHOTO_DIR / "door1.jpg",
         PHOTO_DIR / "hall.jpg",
         PHOTO_DIR / "door2.jpg",
     ],
+
     "food": [
         PHOTO_DIR / "feeder.jpg",
         PHOTO_DIR / "shkaf.jpg",
         PHOTO_DIR / "shkaf_food.jpg",
         PHOTO_DIR / "shkaf_food_2.jpg",
     ],
+
     "water": [
         PHOTO_DIR / "water1.jpg",
         PHOTO_DIR / "water1_zoom.jpg",
         PHOTO_DIR / "water2.jpg",
     ],
+
     "trays": [
         PHOTO_DIR / "lotki.jpg",
         PHOTO_DIR / "lotki_zoom.jpg",
     ],
+
     "med": [
         PHOTO_DIR / "shkaf.jpg",
         PHOTO_DIR / "shkaf_farm.jpg",
@@ -149,16 +162,14 @@ def user_title(update: Update) -> str:
     user = update.effective_user
     if not user:
         return "Неизвестный пользователь"
-    full_name = " ".join(part for part in [user.first_name, user.last_name] if part).strip()
+    full_name = " ".join(
+        part for part in [user.first_name, user.last_name] if part
+    ).strip()
     username = f"@{user.username}" if user.username else "без username"
     return f"{full_name or 'Без имени'} ({username}, id={user.id})"
 
 
 async def notify_owner(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
-    if not OWNER_CHAT_ID:
-        logger.info("OWNER_CHAT_ID не задан, пропускаю отправку владельцу")
-        return
-
     try:
         await context.bot.send_message(
             chat_id=OWNER_CHAT_ID,
@@ -256,18 +267,23 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "🚪 Как войти":
         await send_album(chat_id, context, "entry")
+        await log_action(update, context, "Открыт раздел: Как войти")
 
     elif text == "🍽 Еда и кормушка":
         await send_album(chat_id, context, "food")
+        await log_action(update, context, "Открыт раздел: Еда и кормушка")
 
     elif text == "💧 Вода и поилки":
         await send_album(chat_id, context, "water")
+        await log_action(update, context, "Открыт раздел: Вода и поилки")
 
     elif text == "🧻 Лотки и наполнитель":
         await send_album(chat_id, context, "trays")
+        await log_action(update, context, "Открыт раздел: Лотки и наполнитель")
 
     elif text == "💊 Аптечка и остальное":
         await send_album(chat_id, context, "med")
+        await log_action(update, context, "Открыт раздел: Аптечка и остальное")
 
     elif text == "📸 Ходил(а) к котёнку":
         context.user_data["awaiting_visit_photo"] = True
@@ -302,27 +318,26 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     safe_user = html.escape(user_title(update))
     safe_caption = html.escape(caption)
 
-    if OWNER_CHAT_ID:
-        await context.bot.send_photo(
-            chat_id=OWNER_CHAT_ID,
-            photo=largest_photo.file_id,
-            caption=(
-                f"📸 <b>Фото от посетителя</b>\n\n"
-                f"<b>Пользователь:</b> {safe_user}\n"
-                f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
-                f"<b>Подпись:</b> {safe_caption if safe_caption else '—'}"
-            ),
-            parse_mode="HTML",
-        )
+    await context.bot.send_photo(
+        chat_id=OWNER_CHAT_ID,
+        photo=largest_photo.file_id,
+        caption=(
+            f"📸 <b>Фото от посетителя</b>\n\n"
+            f"<b>Пользователь:</b> {safe_user}\n"
+            f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
+            f"<b>Подпись:</b> {safe_caption if safe_caption else '—'}"
+        ),
+        parse_mode="HTML",
+    )
 
-        await notify_owner(
-            context,
-            (
-                f"✅ <b>Фото визита получено</b>\n\n"
-                f"<b>От:</b> {safe_user}\n"
-                f"<b>Chat ID:</b> <code>{chat_id}</code>"
-            ),
-        )
+    await notify_owner(
+        context,
+        (
+            f"✅ <b>Фото визита получено</b>\n\n"
+            f"<b>От:</b> {safe_user}\n"
+            f"<b>Chat ID:</b> <code>{chat_id}</code>"
+        ),
+    )
 
     context.user_data["awaiting_visit_photo"] = False
 
