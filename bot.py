@@ -1,3 +1,4 @@
+from collections import defaultdict
 from pathlib import Path
 import os
 import html
@@ -35,6 +36,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+MEDIA_GROUP_BUFFER = defaultdict(list)
+MEDIA_GROUP_TASKS = {}
+
 TEXTS = {
     "welcome": (
         "🐾 <b>Привет! Это мини-бот помощник по Анфисочке</b>\n\n"
@@ -49,7 +53,8 @@ TEXTS = {
         "🚪 <b>Как войти</b>\n\n"
         "🔔 Домофон иногда <b>не открывает дверь</b>. "
         "Если не сработает — используйте <b>запасной ключ</b>.\n\n"
-        "🎀 Вход в квартиру — <b>в холле, дверь с бантом</b>."
+        "🎀 Вход в квартиру — <b>в холле, дверь с бантом</b>.\n\n"
+        "⚠️<b>Пожалуйста, после того, как закончите и будете выходить - не забудьте закрыть двери на ключ (дверь от квартиры и дверь в холл(как обычную дверь на ключ, но не забывайте, что в таком случае открытие двери не будет происходить по nfc ключу от домофона))</b>"
     ),
 
     "food": (
@@ -135,6 +140,7 @@ PHOTOS = {
     "trays": [
         PHOTO_DIR / "lotki.jpg",
         PHOTO_DIR / "lotki_zoom.jpg",
+        PHOTO_DIR / "lotki_zoom2.jpg",
     ],
 
     "med": [
@@ -192,6 +198,221 @@ async def log_action(update: Update, context: ContextTypes.DEFAULT_TYPE, action:
         f"<b>Действие:</b> {safe_action}"
     )
     await notify_owner(context, text)
+
+
+async def forward_user_text_to_owner(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+    safe_user = html.escape(user_title(update))
+    safe_text = html.escape(text)
+    chat_id = update.effective_chat.id
+
+    await context.bot.send_message(
+        chat_id=OWNER_CHAT_ID,
+        text=(
+            f"💬 <b>Сообщение от пользователя</b>\n\n"
+            f"<b>Пользователь:</b> {safe_user}\n"
+            f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
+            f"<b>Текст:</b> {safe_text}"
+        ),
+        parse_mode="HTML",
+    )
+
+
+async def flush_media_group(context: ContextTypes.DEFAULT_TYPE, media_group_id: str) -> None:
+    await asyncio.sleep(1.5)
+
+    items = MEDIA_GROUP_BUFFER.pop(media_group_id, [])
+    MEDIA_GROUP_TASKS.pop(media_group_id, None)
+
+    if not items:
+        return
+
+    first = items[0]
+    update = first["update"]
+    safe_user = html.escape(user_title(update))
+    chat_id = update.effective_chat.id
+
+    media = []
+    for i, item in enumerate(items):
+        file_id = item["file_id"]
+        caption = item["caption"]
+        if i == 0:
+            media.append(
+                InputMediaPhoto(
+                    media=file_id,
+                    caption=(
+                        f"🖼 <b>Альбом от пользователя</b>\n\n"
+                        f"<b>Пользователь:</b> {safe_user}\n"
+                        f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
+                        f"<b>Альбом:</b> <code>{media_group_id}</code>\n"
+                        f"<b>Подпись:</b> {html.escape(caption) if caption else '—'}"
+                    ),
+                    parse_mode="HTML",
+                )
+            )
+        else:
+            media.append(InputMediaPhoto(media=file_id))
+
+    await context.bot.send_media_group(
+        chat_id=OWNER_CHAT_ID,
+        media=media,
+    )
+
+    await log_action(update, context, f"Пользователь отправил альбом из {len(items)} фото")
+
+
+async def handle_user_photo_forwarding(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not update.message.photo:
+        return
+
+    media_group_id = update.message.media_group_id
+    caption = update.message.caption or ""
+    file_id = update.message.photo[-1].file_id
+
+    if media_group_id:
+        MEDIA_GROUP_BUFFER[media_group_id].append(
+            {
+                "file_id": file_id,
+                "caption": caption,
+                "update": update,
+            }
+        )
+
+        if media_group_id not in MEDIA_GROUP_TASKS:
+            MEDIA_GROUP_TASKS[media_group_id] = asyncio.create_task(
+                flush_media_group(context, media_group_id)
+            )
+        return
+
+    safe_user = html.escape(user_title(update))
+    chat_id = update.effective_chat.id
+    safe_caption = html.escape(caption)
+
+    await context.bot.send_photo(
+        chat_id=OWNER_CHAT_ID,
+        photo=file_id,
+        caption=(
+            f"🖼 <b>Фото от пользователя</b>\n\n"
+            f"<b>Пользователь:</b> {safe_user}\n"
+            f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
+            f"<b>Подпись:</b> {safe_caption if safe_caption else '—'}"
+        ),
+        parse_mode="HTML",
+    )
+
+    await log_action(update, context, "Пользователь отправил фото")
+
+
+async def forward_user_sticker_to_owner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not update.message.sticker:
+        return
+
+    safe_user = html.escape(user_title(update))
+    chat_id = update.effective_chat.id
+    emoji = html.escape(update.message.sticker.emoji or "—")
+
+    await context.bot.send_sticker(
+        chat_id=OWNER_CHAT_ID,
+        sticker=update.message.sticker.file_id,
+    )
+
+    await context.bot.send_message(
+        chat_id=OWNER_CHAT_ID,
+        text=(
+            f"🎭 <b>Стикер от пользователя</b>\n\n"
+            f"<b>Пользователь:</b> {safe_user}\n"
+            f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
+            f"<b>Emoji:</b> {emoji}"
+        ),
+        parse_mode="HTML",
+    )
+
+
+async def forward_user_video_to_owner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not update.message.video:
+        return
+
+    safe_user = html.escape(user_title(update))
+    chat_id = update.effective_chat.id
+    caption = update.message.caption or ""
+    safe_caption = html.escape(caption)
+
+    await context.bot.send_video(
+        chat_id=OWNER_CHAT_ID,
+        video=update.message.video.file_id,
+        caption=(
+            f"🎬 <b>Видео от пользователя</b>\n\n"
+            f"<b>Пользователь:</b> {safe_user}\n"
+            f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
+            f"<b>Подпись:</b> {safe_caption if safe_caption else '—'}"
+        ),
+        parse_mode="HTML",
+    )
+
+
+async def forward_user_voice_to_owner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not update.message.voice:
+        return
+
+    safe_user = html.escape(user_title(update))
+    chat_id = update.effective_chat.id
+
+    await context.bot.send_voice(
+        chat_id=OWNER_CHAT_ID,
+        voice=update.message.voice.file_id,
+        caption=(
+            f"🎤 <b>Голосовое от пользователя</b>\n\n"
+            f"<b>Пользователь:</b> {safe_user}\n"
+            f"<b>Chat ID:</b> <code>{chat_id}</code>"
+        ),
+        parse_mode="HTML",
+    )
+
+
+async def forward_user_video_note_to_owner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not update.message.video_note:
+        return
+
+    safe_user = html.escape(user_title(update))
+    chat_id = update.effective_chat.id
+
+    await context.bot.send_video_note(
+        chat_id=OWNER_CHAT_ID,
+        video_note=update.message.video_note.file_id,
+    )
+
+    await context.bot.send_message(
+        chat_id=OWNER_CHAT_ID,
+        text=(
+            f"📹 <b>Видеосообщение от пользователя</b>\n\n"
+            f"<b>Пользователь:</b> {safe_user}\n"
+            f"<b>Chat ID:</b> <code>{chat_id}</code>"
+        ),
+        parse_mode="HTML",
+    )
+
+
+async def forward_user_document_to_owner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not update.message.document:
+        return
+
+    safe_user = html.escape(user_title(update))
+    chat_id = update.effective_chat.id
+    caption = update.message.caption or ""
+    safe_caption = html.escape(caption)
+    filename = html.escape(update.message.document.file_name or "без имени")
+
+    await context.bot.send_document(
+        chat_id=OWNER_CHAT_ID,
+        document=update.message.document.file_id,
+        caption=(
+            f"📄 <b>Документ от пользователя</b>\n\n"
+            f"<b>Пользователь:</b> {safe_user}\n"
+            f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
+            f"<b>Файл:</b> {filename}\n"
+            f"<b>Подпись:</b> {safe_caption if safe_caption else '—'}"
+        ),
+        parse_mode="HTML",
+    )
 
 
 async def send_single_photo(chat_id: int, context: ContextTypes.DEFAULT_TYPE, key: str):
@@ -252,12 +473,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info("MY CHAT ID: %s", update.effective_chat.id)
 
 
-async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
-    await update.message.reply_text(f"Твой chat_id: {chat_id}")
-    logger.info("MY CHAT ID via /myid: %s", chat_id)
-
-
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -305,15 +520,29 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not update.message or not update.message.photo:
         return
 
+    await handle_user_photo_forwarding(update, context)
+
     chat_id = update.effective_chat.id
     waiting = context.user_data.get("awaiting_visit_photo", False)
 
     if not waiting:
-        await log_action(update, context, "Пользователь отправил фото вне режима отправки визита")
         return
 
     largest_photo = update.message.photo[-1]
     caption = update.message.caption or ""
+    media_group_id = update.message.media_group_id
+
+    # если это альбом в режиме визита, не дублируем отдельным "Фото от посетителя"
+    if media_group_id:
+        context.user_data["awaiting_visit_photo"] = False
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=TEXTS["visit_success"],
+            parse_mode="HTML",
+            reply_markup=main_menu_keyboard(),
+        )
+        await log_action(update, context, "Пользователь отправил фото визита альбомом")
+        return
 
     safe_user = html.escape(user_title(update))
     safe_caption = html.escape(caption)
@@ -330,15 +559,6 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         parse_mode="HTML",
     )
 
-    await notify_owner(
-        context,
-        (
-            f"✅ <b>Фото визита получено</b>\n\n"
-            f"<b>От:</b> {safe_user}\n"
-            f"<b>Chat ID:</b> <code>{chat_id}</code>"
-        ),
-    )
-
     context.user_data["awaiting_visit_photo"] = False
 
     await context.bot.send_message(
@@ -349,6 +569,30 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
     await log_action(update, context, "Пользователь отправил фото визита")
+
+async def sticker_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await forward_user_sticker_to_owner(update, context)
+    await log_action(update, context, "Пользователь отправил стикер")
+
+
+async def video_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await forward_user_video_to_owner(update, context)
+    await log_action(update, context, "Пользователь отправил видео")
+
+
+async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await forward_user_voice_to_owner(update, context)
+    await log_action(update, context, "Пользователь отправил голосовое")
+
+
+async def video_note_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await forward_user_video_note_to_owner(update, context)
+    await log_action(update, context, "Пользователь отправил видеосообщение")
+
+
+async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await forward_user_document_to_owner(update, context)
+    await log_action(update, context, "Пользователь отправил документ")
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -366,8 +610,12 @@ def main() -> None:
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("myid", myid))
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
+    app.add_handler(MessageHandler(filters.Sticker.ALL, sticker_handler))
+    app.add_handler(MessageHandler(filters.VIDEO, video_handler))
+    app.add_handler(MessageHandler(filters.VOICE, voice_handler))
+    app.add_handler(MessageHandler(filters.VIDEO_NOTE, video_note_handler))
+    app.add_handler(MessageHandler(filters.Document.ALL, document_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_handler))
     app.add_error_handler(error_handler)
 
