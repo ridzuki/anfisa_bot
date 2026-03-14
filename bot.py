@@ -523,8 +523,6 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     chat_id = update.effective_chat.id
 
-    await forward_user_text_to_owner(update, context, text)
-
     if text == "🚪 Как войти":
         context.user_data["awaiting_visit_photo"] = False
         context.user_data["visit_success_sent"] = False
@@ -571,6 +569,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["visit_success_sent"] = False
         await send_single_photo(chat_id, context, "welcome")
         await log_action(update, context, f"Отправлен произвольный текст: {text}")
+        await forward_user_text_to_owner(update, context, text)
 
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
