@@ -3,6 +3,7 @@ from pathlib import Path
 import os
 import html
 import logging
+import asyncio
 
 from telegram import (
     Update,
@@ -39,6 +40,7 @@ logger = logging.getLogger(__name__)
 MEDIA_GROUP_BUFFER = defaultdict(list)
 MEDIA_GROUP_TASKS = {}
 
+
 TEXTS = {
     "welcome": (
         "🐾 <b>Привет! Это мини-бот помощник по Анфисочке</b>\n\n"
@@ -57,11 +59,11 @@ TEXTS = {
         "⚠️<b>🚪Перед уходом</b>\n\n"
         "Пожалуйста, когда будете уходить, <b>не забудьте закрыть двери на ключ</b>.\n"
         "Нужно закрыть:\n"
-        "• <b>дверь квартиры</b>\n" 
+        "• <b>дверь квартиры</b>\n"
         "• <b>дверь в холл</b>\n\n"
         "Сейчас участились случаи взломов, поэтому лучше обезопасить квартиру дополнитель закрыв входную группу(там где домофон).\n"
         "Дверь в холл закрывается <b>обычным ключом</b>.\n"
-        "⚠️ Обратите внимание: если закрыть её на ключ, <b>открыть её через NFC-ключ домофона уже не получится</b>.</b>"
+        "⚠️ Обратите внимание: если закрыть её на ключ, <b>открыть её через NFC-ключ домофона уже не получится</b>."
     ),
 
     "food": (
@@ -120,6 +122,7 @@ TEXTS = {
         "Спасибо большое!"
     ),
 }
+
 
 PHOTOS = {
     "welcome": [
@@ -239,22 +242,35 @@ async def flush_media_group(context: ContextTypes.DEFAULT_TYPE, media_group_id: 
     update = first["update"]
     safe_user = html.escape(user_title(update))
     chat_id = update.effective_chat.id
+    is_visit = first["is_visit"]
 
     media = []
     for i, item in enumerate(items):
         file_id = item["file_id"]
         caption = item["caption"]
+
         if i == 0:
+            if is_visit:
+                first_caption = (
+                    f"📸 <b>Фото от посетителя</b>\n\n"
+                    f"<b>Пользователь:</b> {safe_user}\n"
+                    f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
+                    f"<b>Альбом:</b> <code>{media_group_id}</code>\n"
+                    f"<b>Подпись:</b> {html.escape(caption) if caption else '—'}"
+                )
+            else:
+                first_caption = (
+                    f"🖼 <b>Альбом от пользователя</b>\n\n"
+                    f"<b>Пользователь:</b> {safe_user}\n"
+                    f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
+                    f"<b>Альбом:</b> <code>{media_group_id}</code>\n"
+                    f"<b>Подпись:</b> {html.escape(caption) if caption else '—'}"
+                )
+
             media.append(
                 InputMediaPhoto(
                     media=file_id,
-                    caption=(
-                        f"🖼 <b>Альбом от пользователя</b>\n\n"
-                        f"<b>Пользователь:</b> {safe_user}\n"
-                        f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
-                        f"<b>Альбом:</b> <code>{media_group_id}</code>\n"
-                        f"<b>Подпись:</b> {html.escape(caption) if caption else '—'}"
-                    ),
+                    caption=first_caption,
                     parse_mode="HTML",
                 )
             )
@@ -266,10 +282,13 @@ async def flush_media_group(context: ContextTypes.DEFAULT_TYPE, media_group_id: 
         media=media,
     )
 
-    await log_action(update, context, f"Пользователь отправил альбом из {len(items)} фото")
+    if is_visit:
+        await log_action(update, context, f"Пользователь отправил фото визита альбомом ({len(items)} фото)")
+    else:
+        await log_action(update, context, f"Пользователь отправил альбом из {len(items)} фото")
 
 
-async def handle_user_photo_forwarding(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_user_photo_forwarding(update: Update, context: ContextTypes.DEFAULT_TYPE, is_visit: bool) -> None:
     if not update.message or not update.message.photo:
         return
 
@@ -283,6 +302,7 @@ async def handle_user_photo_forwarding(update: Update, context: ContextTypes.DEF
                 "file_id": file_id,
                 "caption": caption,
                 "update": update,
+                "is_visit": is_visit,
             }
         )
 
@@ -296,19 +316,32 @@ async def handle_user_photo_forwarding(update: Update, context: ContextTypes.DEF
     chat_id = update.effective_chat.id
     safe_caption = html.escape(caption)
 
-    await context.bot.send_photo(
-        chat_id=OWNER_CHAT_ID,
-        photo=file_id,
-        caption=(
+    if is_visit:
+        caption_text = (
+            f"📸 <b>Фото от посетителя</b>\n\n"
+            f"<b>Пользователь:</b> {safe_user}\n"
+            f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
+            f"<b>Подпись:</b> {safe_caption if safe_caption else '—'}"
+        )
+    else:
+        caption_text = (
             f"🖼 <b>Фото от пользователя</b>\n\n"
             f"<b>Пользователь:</b> {safe_user}\n"
             f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
             f"<b>Подпись:</b> {safe_caption if safe_caption else '—'}"
-        ),
+        )
+
+    await context.bot.send_photo(
+        chat_id=OWNER_CHAT_ID,
+        photo=file_id,
+        caption=caption_text,
         parse_mode="HTML",
     )
 
-    await log_action(update, context, "Пользователь отправил фото")
+    if is_visit:
+        await log_action(update, context, "Пользователь отправил фото визита")
+    else:
+        await log_action(update, context, "Пользователь отправил фото")
 
 
 async def forward_user_sticker_to_owner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -477,6 +510,7 @@ async def send_album(chat_id: int, context: ContextTypes.DEFAULT_TYPE, key: str)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     context.user_data["awaiting_visit_photo"] = False
+    context.user_data["visit_success_sent"] = False
     await send_single_photo(chat_id, context, "welcome")
     await log_action(update, context, "/start")
     logger.info("MY CHAT ID: %s", update.effective_chat.id)
@@ -489,28 +523,41 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     chat_id = update.effective_chat.id
 
+    await forward_user_text_to_owner(update, context, text)
+
     if text == "🚪 Как войти":
+        context.user_data["awaiting_visit_photo"] = False
+        context.user_data["visit_success_sent"] = False
         await send_album(chat_id, context, "entry")
         await log_action(update, context, "Открыт раздел: Как войти")
 
     elif text == "🍽 Еда и кормушка":
+        context.user_data["awaiting_visit_photo"] = False
+        context.user_data["visit_success_sent"] = False
         await send_album(chat_id, context, "food")
         await log_action(update, context, "Открыт раздел: Еда и кормушка")
 
     elif text == "💧 Вода и поилки":
+        context.user_data["awaiting_visit_photo"] = False
+        context.user_data["visit_success_sent"] = False
         await send_album(chat_id, context, "water")
         await log_action(update, context, "Открыт раздел: Вода и поилки")
 
     elif text == "🧻 Лотки и наполнитель":
+        context.user_data["awaiting_visit_photo"] = False
+        context.user_data["visit_success_sent"] = False
         await send_album(chat_id, context, "trays")
         await log_action(update, context, "Открыт раздел: Лотки и наполнитель")
 
     elif text == "💊 Аптечка и остальное":
+        context.user_data["awaiting_visit_photo"] = False
+        context.user_data["visit_success_sent"] = False
         await send_album(chat_id, context, "med")
         await log_action(update, context, "Открыт раздел: Аптечка и остальное")
 
     elif text == "📸 Ходил(а) к котёнку":
         context.user_data["awaiting_visit_photo"] = True
+        context.user_data["visit_success_sent"] = False
         await context.bot.send_message(
             chat_id=chat_id,
             text=TEXTS["visit_prompt"],
@@ -521,6 +568,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     else:
         context.user_data["awaiting_visit_photo"] = False
+        context.user_data["visit_success_sent"] = False
         await send_single_photo(chat_id, context, "welcome")
         await log_action(update, context, f"Отправлен произвольный текст: {text}")
 
@@ -529,46 +577,29 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not update.message or not update.message.photo:
         return
 
-    await handle_user_photo_forwarding(update, context)
-
-    chat_id = update.effective_chat.id
     waiting = context.user_data.get("awaiting_visit_photo", False)
+    media_group_id = update.message.media_group_id
+    chat_id = update.effective_chat.id
+
+    await handle_user_photo_forwarding(update, context, is_visit=waiting)
 
     if not waiting:
         return
 
-    largest_photo = update.message.photo[-1]
-    caption = update.message.caption or ""
-    media_group_id = update.message.media_group_id
-
-    # если это альбом в режиме визита, не дублируем отдельным "Фото от посетителя"
     if media_group_id:
-        context.user_data["awaiting_visit_photo"] = False
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=TEXTS["visit_success"],
-            parse_mode="HTML",
-            reply_markup=main_menu_keyboard(),
-        )
-        await log_action(update, context, "Пользователь отправил фото визита альбомом")
+        if not context.user_data.get("visit_success_sent", False):
+            context.user_data["visit_success_sent"] = True
+            context.user_data["awaiting_visit_photo"] = False
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=TEXTS["visit_success"],
+                parse_mode="HTML",
+                reply_markup=main_menu_keyboard(),
+            )
         return
 
-    safe_user = html.escape(user_title(update))
-    safe_caption = html.escape(caption)
-
-    await context.bot.send_photo(
-        chat_id=OWNER_CHAT_ID,
-        photo=largest_photo.file_id,
-        caption=(
-            f"📸 <b>Фото от посетителя</b>\n\n"
-            f"<b>Пользователь:</b> {safe_user}\n"
-            f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
-            f"<b>Подпись:</b> {safe_caption if safe_caption else '—'}"
-        ),
-        parse_mode="HTML",
-    )
-
     context.user_data["awaiting_visit_photo"] = False
+    context.user_data["visit_success_sent"] = False
 
     await context.bot.send_message(
         chat_id=chat_id,
@@ -577,7 +608,6 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         reply_markup=main_menu_keyboard(),
     )
 
-    await log_action(update, context, "Пользователь отправил фото визита")
 
 async def sticker_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await forward_user_sticker_to_owner(update, context)
